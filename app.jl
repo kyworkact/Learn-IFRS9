@@ -1,15 +1,21 @@
 using Dash
-using DataFrames, PlotlyJS, CSV
+using DataFrames, CSV, PlotlyJS
 
-csv_data = download("https://raw.githubusercontent.com/plotly/datasets/master/country_indicators.csv")
-df2 = CSV.read(csv_data, DataFrame)
+include("data_processing.jl")
+include("plotting.jl")
+include("utils.jl")
 
-dropmissing!(df2)
+# Load data, calculate factors, and project PD
+df = load_data()
+factors = calculate_factors(df)
+df_chain = project_pd(df, factors)
+df_chain_plot = plot_pd(df_chain)
 
-rename!(df2, Dict(:"Year" => "year"))
-
-available_indicators = unique(df2[!, "Indicator Name"])
-years = unique(df2[!, "year"])
+df_avg_data = plot_weighted_average_pd(weighted_average(df))
+df_avg_chain = plot_weighted_average_pd(weighted_average(df_chain))
+available_segment = unique(df[!, "Segment"])
+available_data_type = ["Raw", "Projected"]
+dataDict = Dict("Raw" => df_avg_data, "Projected" => df_avg_chain)
 
 app = dash()
 
@@ -17,79 +23,57 @@ app.layout = html_div() do
     html_div(
         children = [
             dcc_dropdown(
-                id = "xaxis-column",
+                id = "segment-selection",
                 options = [
-                    (label = i, value = i) for i in available_indicators
+                    (label = i, value = i) for i in available_segment
                 ],
-                value = "Fertility rate, total (births per woman)",
-            ),
-            dcc_radioitems(
-                id = "xaxis-type",
-                options = [(label = i, value = i) for i in ["linear", "log"]],
-                value = "linear",
+                value = "CU",
             ),
         ],
-        style = (width = "48%", display = "inline-block"),
     ),
+    dcc_graph(id = "pd-graphic"),
     html_div(
         children = [
             dcc_dropdown(
-                id = "yaxis-column",
+                id = "data-type-selection",
                 options = [
-                    (label = i, value = i) for i in available_indicators
+                    (label = i, value = i) for i in available_data_type
                 ],
-                value = "Life expectancy at birth, total (years)",
-            ),
-            dcc_radioitems(
-                id = "yaxis-type",
-                options = [(label = i, value = i) for i in ["linear", "log"]],
-                value = "linear",
+                value = "Raw",
             ),
         ],
-        style = (width = "48%", display = "inline-block", float = "right"),
     ),
-    dcc_graph(id = "indicator-graphic"),
-    dcc_slider(
-        id = "year-slider-2",
-        min = minimum(years),
-        max = maximum(years),
-        marks = Dict([Symbol(v) => Symbol(v) for v in years]),
-        value = minimum(years),
-        step = nothing,
-    )
+    dcc_graph(id = "avg-pd-graphic")
 end
 
 callback!(
     app,
-    Output("indicator-graphic", "figure"),
-    Input("xaxis-column", "value"),
-    Input("yaxis-column", "value"),
-    Input("xaxis-type", "value"),
-    Input("yaxis-type", "value"),
-    Input("year-slider-2", "value"),
-) do xaxis_column_name, yaxis_column_name, xaxis_type, yaxis_type, year_value
-    df2f = df2[df2.year .== year_value, :]
-    return Plot(
-        df2f[df2f[!, Symbol("Indicator Name")] .== xaxis_column_name, :Value],
-        df2f[df2f[!, Symbol("Indicator Name")] .== yaxis_column_name, :Value],
+    Output("pd-graphic", "figure"),
+    Output("avg-pd-graphic", "figure"),
+    Input("segment-selection", "value"),
+    Input("data-type-selection", "value"),
+) do segmentselection, dataType
+    dff = filter(row -> row.Segment == segmentselection, df_chain_plot)
+    plot1 = Plot(
+        dff,
+        x = :times,
+        y = :badRate,
+        group = :Year,
         Layout(
-            xaxis_type = xaxis_type == "Linear" ? "linear" : "log",
-            xaxis_title = xaxis_column_name,
-            yaxis_title = yaxis_column_name,
-            yaxis_type = yaxis_type == "Linear" ? "linear" : "log",
-            hovermode = "closest",
-        ),
-        kind = "scatter",
-        text = df2f[
-            df2f[!, Symbol("Indicator Name")] .== yaxis_column_name,
-            Symbol("Country Name"),
-        ],
-        mode = "markers",
-        marker_size = 15,
-        marker_opacity = 0.5,
-        marker_line_width = 0.5,
-        marker_line_color = "white"
+            xaxis_title = segmentselection
+        )
     )
+    dff2 = filter(row -> row.Segment == segmentselection, dataDict[dataType])
+    plot2 = Plot(
+        dff2,
+        x = :times,
+        y = :badRate,
+        group = :Aging,
+        Layout(
+            xaxis_title = segmentselection
+        )
+    )
+    return plot1, plot2
 end
 
-run_server(app, "0.0.0.0", debug = true)
+run_server(app, "0.0.0.0", debug=true)
